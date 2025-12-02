@@ -1,0 +1,1 @@
+ejecutar backusp.sh hara el primer respaldo y configurara el cron para ejecutarse diariamente
