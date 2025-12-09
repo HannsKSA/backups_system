@@ -1,178 +1,140 @@
 #!/bin/bash
 
 # Este script realiza un backup de la base de datos y el filestore de Odoo
-# DIRECTAMENTE en el servidor remoto mediante SSH streaming (sin almacenamiento local)
-# Optimizado para bases de datos de 90GB+ que colapsan el servidor local
+# en un entorno Docker Compose, optimizado para bases de datos muy grandes.
+# La base de datos es COMPRIMIDA en línea (on-the-fly) para ahorrar espacio y tiempo de E/S.
 # ======================================================================
-# 0. CONFIGURACIÓN DEL CRON (Hora definida por TIME_GMT en el .env)
+# 0. CONFIGURACIÓN DEL CRON (Verificar y añadir si es necesario)
 # ======================================================================
 
 set -e # Detener el script inmediatamente si algún comando falla
 set -a
-# 🛑 ATENCIÓN: Solo se LEE de /srv/.env (TIME_GMT, credenciales, INSTANCE), NUNCA se ESCRIBE en él.
-source /srv/.env 
+source /srv/.env # <--- ¡ACTUALIZADO! Fuente de variables de /srv/.env
 set +a
 
-# Define la ruta ABSOLUTA del script.
-SCRIPT_PATH="$(readlink -f "$0")"
+# --- CONFIGURACIÓN DE CRON ---
+SCRIPT_PATH="/srv/scripts/backups.sh" 
+CRON_JOB="0 3 * * * bash $SCRIPT_PATH >> /var/log/backup_cron.log 2>&1"
 
-# --- CÁLCULO DINÁMICO DE LA HORA CRON LOCAL BASADO EN TIME_GMT ---
-if [ -z "$TIME_GMT" ]; then
-    # Default to 03:00 local if not set
-    CRON_HOUR="3"
-    CRON_MINUTE="0"
-else
-    # Convierte la hora GMT deseada (Ej: "03:00:00 GMT+4") a la hora local del servidor.
-    LOCAL_DATE_TIME=$(date -d "$TIME_GMT" +"%H:%M")
-    CRON_HOUR=$(echo $LOCAL_DATE_TIME | cut -d: -f1)
-    CRON_MINUTE=$(echo $LOCAL_DATE_TIME | cut -d: -f2)
-fi
-
-# Define la línea de CRON deseada
-CRON_JOB="$CRON_MINUTE $CRON_HOUR * * * bash $SCRIPT_PATH >> /var/log/backup_cron.log 2>&1"
-
-# Búsqueda y actualización de la línea CRON
-if ! crontab -l 2>/dev/null | grep -Fq "$SCRIPT_PATH" ; then
-    echo "⚠️ Actualizando tarea cron: $CRON_JOB"
-    (crontab -l 2>/dev/null | grep -v "$SCRIPT_PATH" || true) | crontab - 2>/dev/null
+echo "Verificando la existencia de la tarea cron para el backup diario..."
+if ! crontab -l 2>/dev/null | grep -Fq "$CRON_JOB" ; then
+    echo "⚠️ La tarea cron no existe. Creándola: $CRON_JOB"
     (crontab -l 2>/dev/null; echo "$CRON_JOB") | crontab -
+    if [ $? -eq 0 ]; then
+        echo "✅ Tarea cron añadida exitosamente. Se ejecutará diariamente a las 3:00 AM."
+    else
+        echo "❌ ERROR: Fallo al añadir la tarea cron. Revise permisos de usuario."
+    fi
+else
+    echo "✅ La tarea cron ya existe. No se requiere acción."
 fi
 
 # ======================================================================
 # 1. CONFIGURACIÓN INICIAL
 # ======================================================================
 
-PROJECT_ROOT="/srv"
+# --- 1.1 Rutas y Nomenclatura ---
+PROJECT_ROOT="/srv" # Asumimos que la raíz del proyecto ahora es /srv
 DB_CONTAINER="${INSTANCE}_postgres"
-OD_CONTAINER="${INSTANCE}_odoo"
 DB_NAME="${POSTGRES_DBNAME}" 
 DB_USER="${POSTGRES_USER}"
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S") 
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
-# Rutas ABSOLUTAS de los volúmenes en el Host
+# DIRECTORIO DE BACKUPS (Relativo al lugar de ejecución: /srv/scripts/backups)
+BACKUP_DIR="./backups"
+
+# Rutas ABSOLUTAS de los volúmenes en el Host (usadas para tar)
+# Ajuste de ruta: Asumimos que data/odoo/web-data ahora está en /srv/data/...
 ODOO_FILESTORE_ROOT="${PROJECT_ROOT}/data/odoo/web-data" 
+ODOO_ADDONS_PATH="${ODOO_FILESTORE_ROOT}/addons"
+
+# Nombres de los archivos intermedios de salida
+SQL_FILE="${BACKUP_DIR}/db_dump_${TIMESTAMP}.sql.gz" 
+FILESTORE_TAR="${BACKUP_DIR}/filestore_backup_${TIMESTAMP}.tar.gz"
+
+echo "Iniciando proceso de respaldo para la DB: $DB_NAME"
+mkdir -p "$BACKUP_DIR"
 
 # ======================================================================
-# 2. CONFIGURACIÓN SSH REMOTA (desde transfer.sh)
+# 3. RESPALDO DE LA BASE DE DATOS (POSTGRES) - OPTIMIZADO
 # ======================================================================
-SSH_HOST="u502156.your-storagebox.de"
-SSH_USER="u502156"
-SSH_PORT="23"
-SSH_KEY="$HOME/.ssh/id_backups"
-REMOTE_BASE_PATH="/home/vps"
-REMOTE_DEST_DIR="${REMOTE_BASE_PATH}/${INSTANCE}"
-
-# Nombres de archivos remotos
-REMOTE_SQL_FILE="${DB_NAME}_${TIMESTAMP}.sql.gz"
-REMOTE_FILESTORE_TAR="${DB_NAME}_filestore_${TIMESTAMP}.tar.gz"
-REMOTE_FINAL_BACKUP="${DB_NAME}_full_${TIMESTAMP}.tar.gz"
-
-echo "=========================================="
-echo "🚀 INICIO DE BACKUP REMOTO DIRECTO"
-echo "=========================================="
-echo "Instancia: $INSTANCE"
-echo "Base de datos: $DB_NAME"
-echo "Destino: $SSH_USER@$SSH_HOST:$REMOTE_DEST_DIR"
-echo "Timestamp: $TIMESTAMP"
-echo "=========================================="
-
-# ======================================================================
-# 3. VERIFICAR CONEXIÓN SSH Y CREAR DIRECTORIO REMOTO
-# ======================================================================
-echo "📡 Verificando conexión SSH..."
-if ! ssh -p "$SSH_PORT" -i "$SSH_KEY" -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=10 "$SSH_USER@$SSH_HOST" "mkdir -p $REMOTE_DEST_DIR" 2>/dev/null; then
-    echo "❌ ERROR: No se pudo conectar al servidor remoto o crear el directorio."
-    echo "   Verifica:"
-    echo "   - Conectividad de red"
-    echo "   - Clave SSH en $SSH_KEY"
-    echo "   - Permisos en el servidor remoto"
-    exit 1
-fi
-echo "✅ Conexión SSH establecida correctamente"
-
-# ======================================================================
-# 4. BACKUP DE LA BASE DE DATOS (STREAMING DIRECTO)
-# ======================================================================
-echo ""
-echo "📦 Iniciando backup de base de datos (streaming directo al servidor remoto)..."
-echo "   Esto puede tardar varios minutos dependiendo del tamaño de la DB..."
-
-# Hacer pg_dump, comprimir con gzip, y enviar directamente por SSH sin guardar localmente
-PGPASSWORD="${POSTGRES_PASSWORD}" docker exec "$DB_CONTAINER" pg_dump -U "$DB_USER" -d "$DB_NAME" | \
-    gzip -c | \
-    ssh -p "$SSH_PORT" -i "$SSH_KEY" -o StrictHostKeyChecking=no -o BatchMode=yes "$SSH_USER@$SSH_HOST" \
-    "cat > ${REMOTE_DEST_DIR}/${REMOTE_SQL_FILE}"
+echo "Respaldando base de datos Odoo: $DB_NAME y comprimiendo en línea en $SQL_FILE"
+PGPASSWORD="${POSTGRES_PASSWORD}" docker exec "$DB_CONTAINER" pg_dump -U "$DB_USER" -d "$DB_NAME" | gzip -c > "$SQL_FILE"
 
 if [ $? -eq 0 ]; then
-    echo "✅ Base de datos respaldada exitosamente: $REMOTE_SQL_FILE"
+    echo "✅ Respaldo de la base de datos completado. Tamaño: $(du -sh "$SQL_FILE" | awk '{print $1}')"
 else
-    echo "❌ ERROR: Falló el backup de la base de datos"
+    echo "❌ Error al respaldar la base de datos. Terminando."
     exit 1
 fi
 
 # ======================================================================
-# 5. BACKUP DEL FILESTORE (STREAMING DIRECTO)
+# 4. RESPALDO DEL FILESTORE (ARCHIVOS ADJUNTOS)
 # ======================================================================
-echo ""
-echo "📁 Iniciando backup del filestore (streaming directo al servidor remoto)..."
-echo "   Comprimiendo y transfiriendo filestore..."
-
-# Comprimir el filestore y enviarlo directamente por SSH sin guardar localmente
-tar -czf - -C "$ODOO_FILESTORE_ROOT" filestore 2>/dev/null | \
-    ssh -p "$SSH_PORT" -i "$SSH_KEY" -o StrictHostKeyChecking=no -o BatchMode=yes "$SSH_USER@$SSH_HOST" \
-    "cat > ${REMOTE_DEST_DIR}/${REMOTE_FILESTORE_TAR}"
+echo "Comprimiendo el filestore de Odoo en: $FILESTORE_TAR"
+tar -czf "$FILESTORE_TAR" -C "$ODOO_FILESTORE_ROOT" filestore
 
 if [ $? -eq 0 ]; then
-    echo "✅ Filestore respaldado exitosamente: $REMOTE_FILESTORE_TAR"
+    echo "✅ Respaldo del filestore completado. Tamaño: $(du -sh "$FILESTORE_TAR" | awk '{print $1}')"
 else
-    echo "❌ ERROR: Falló el backup del filestore"
+    echo "❌ Error al respaldar el filestore. Terminando."
     exit 1
 fi
 
 # ======================================================================
-# 6. CREAR ARCHIVO FINAL UNIFICADO EN EL SERVIDOR REMOTO
+# 5. OPCIONAL: RESPALDO DE ADDONS PERSONALIZADOS
 # ======================================================================
-echo ""
-echo "📦 Creando archivo de backup unificado en el servidor remoto..."
+if [ -d "$ODOO_ADDONS_PATH" ]; then
+    ADDONS_TAR="${BACKUP_DIR}/addons_backup_${TIMESTAMP}.tar.gz"
+    echo "Comprimiendo addons personalizados en: $ADDONS_TAR"
+    tar -czf "$ADDONS_TAR" -C "${ODOO_FILESTORE_ROOT}" addons
+    if [ $? -eq 0 ]; then
+        echo "✅ Respaldo de addons completado. Tamaño: $(du -sh "$ADDONS_TAR" | awk '{print $1}')"
+    else
+        echo "⚠️ Advertencia: Error al respaldar addons."
+    fi
+fi
 
-# Ejecutar tar en el servidor remoto para combinar ambos archivos
-ssh -p "$SSH_PORT" -i "$SSH_KEY" -o StrictHostKeyChecking=no -o BatchMode=yes "$SSH_USER@$SSH_HOST" \
-    "cd ${REMOTE_DEST_DIR} && tar -czf ${REMOTE_FINAL_BACKUP} ${REMOTE_SQL_FILE} ${REMOTE_FILESTORE_TAR} && rm -f ${REMOTE_SQL_FILE} ${REMOTE_FILESTORE_TAR}"
 
+# ======================================================================
+# 6. REGISTRO DE ESTADO EN .env
+# ======================================================================
+TIMESTAMP_FINAL=$(date +"%Y-%m-%d_%H-%M-%S") 
+FINAL_BACKUP_NAME="${DB_NAME}_${TIMESTAMP_FINAL}.tar.gz" 
+CURRENT_TIME_GMT=$(TZ='GMT' date +"%Y-%m-%d %H:%M:%S %Z")
+DOT_ENV_PATH="/srv/.env" # <--- ¡ACTUALIZADO! Ruta de registro
+VAR_TIME="LAST_BACKUP_TIME_GMT=\"$CURRENT_TIME_GMT\""
+VAR_NAME="FINAL_BACKUP_NAME=\"$FINAL_BACKUP_NAME\""
+
+echo "Registrando variables de estado en $DOT_ENV_PATH..."
+update_or_add_var() {
+    local var_line="$1"; local var_name="${var_line%%=*}"
+    if grep -q "$var_name" "$DOT_ENV_PATH"; then
+        sed -i "/^$var_name=/c\\$var_line" "$DOT_ENV_PATH"
+    else
+        echo "$var_line" >> "$DOT_ENV_PATH"
+    fi
+}
+update_or_add_var "$VAR_TIME"
+update_or_add_var "$VAR_NAME"
 if [ $? -eq 0 ]; then
-    echo "✅ Backup unificado creado exitosamente: $REMOTE_FINAL_BACKUP"
-else
-    echo "❌ ERROR: Falló la creación del archivo unificado"
-    exit 1
+    echo "✅ Variables de estado registradas."
 fi
 
 # ======================================================================
-# 7. RETENCIÓN Y LIMPIEZA REMOTA
+# 7. LLAMADA AL SCRIPT DE COMPRESIÓN Y TRANSFERENCIA
 # ======================================================================
-echo ""
-echo "🧹 Aplicando política de retención (últimos 14 días)..."
 
-# Eliminar backups antiguos en el servidor remoto
-ssh -p "$SSH_PORT" -i "$SSH_KEY" -o StrictHostKeyChecking=no -o BatchMode=yes "$SSH_USER@$SSH_HOST" \
-    "find ${REMOTE_DEST_DIR} -type f -name '*_full_*.tar.gz' -mtime +14 -delete"
+echo "Iniciando proceso de compresión y transferencia..."
+
+# Llama al script de transferencia y le pasa la ubicación de la carpeta de backups como argumento
+bash ./transfer.sh "$BACKUP_DIR"
 
 if [ $? -eq 0 ]; then
-    echo "✅ Limpieza de backups antiguos completada"
+    echo "✅ Proceso de transferencia completado exitosamente."
 else
-    echo "⚠️  ADVERTENCIA: No se pudo completar la limpieza de backups antiguos"
+    echo "❌ ADVERTENCIA: El script de transferencia falló. El backup está guardado localmente en $BACKUP_DIR"
 fi
 
-# ======================================================================
-# 8. RESUMEN FINAL
-# ======================================================================
-echo ""
-echo "=========================================="
-echo "✅ BACKUP COMPLETADO EXITOSAMENTE"
-echo "=========================================="
-echo "Archivo final: $REMOTE_FINAL_BACKUP"
-echo "Ubicación: $SSH_USER@$SSH_HOST:$REMOTE_DEST_DIR/"
-echo ""
-echo "📊 Verificar tamaño del backup:"
-ssh -p "$SSH_PORT" -i "$SSH_KEY" -o StrictHostKeyChecking=no -o BatchMode=yes "$SSH_USER@$SSH_HOST" \
-    "ls -lh ${REMOTE_DEST_DIR}/${REMOTE_FINAL_BACKUP}" 2>/dev/null || echo "   (No se pudo obtener información del archivo)"
-echo "=========================================="
+# Final
+echo "Fin de la ejecución del script de Backups."
