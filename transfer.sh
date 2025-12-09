@@ -11,10 +11,10 @@ set -e # Detener el script si algún comando falla
 
 # Cargar variables del .env para obtener FINAL_BACKUP_NAME, INSTANCE, etc.
 set -a
-source /srv/.env # <--- ¡ACTUALIZADO! Fuente de variables de /srv/.env
+source /srv/.env 
 set +a
 
-# La ruta del directorio de backups es el argumento pasado por el script principal
+# La ruta del directorio de backups es el argumento pasado por el script principal (ahora /backups)
 BACKUP_DIR="$1"
 
 if [ -z "$BACKUP_DIR" ]; then
@@ -31,7 +31,7 @@ SSH_USER="u502156"
 SSH_HOST="u502156.your-storagebox.de"
 SSH_PORT="23"
 # La clave SSH debe ser absoluta. Se recomienda usar la ruta del usuario root si es cron.
-SSH_KEY="/root/.ssh/id_backups" # Ajusta esta ruta si el usuario es diferente
+SSH_KEY="/root/.ssh/id_backups" 
 
 # Ruta base en el servidor remoto
 REMOTE_BASE_PATH="/home/vps"
@@ -50,14 +50,17 @@ INTERMEDIATE_PATTERNS="${BACKUP_DIR}/db_dump_*.sql.gz ${BACKUP_DIR}/filestore_ba
 
 echo "Comprimiendo archivos en el paquete final: $FINAL_BACKUP_NAME"
 
-# Cambiar al directorio de backups temporalmente
+# Cambiar al directorio de backups temporalmente (RUTA ABSOLUTA)
 cd "$BACKUP_DIR"
 
 # 'find' obtiene la lista exacta de archivos creados para evitar problemas si no hay addons.
+# NOTA: find busca en el directorio actual (que es /backups)
 FILES_TO_TAR=$(find . -maxdepth 1 -name "db_dump_*.sql.gz" -o -name "filestore_backup_*.tar.gz" -o -name "addons_backup_*.tar.gz" | sed 's|^./||')
 
 if [ -z "$FILES_TO_TAR" ]; then
     echo "❌ ERROR: No se encontraron archivos intermedios para empaquetar en $BACKUP_DIR."
+    # Regresar antes de salir
+    cd - > /dev/null
     exit 1
 fi
 

@@ -9,7 +9,7 @@
 
 set -e # Detener el script inmediatamente si algún comando falla
 set -a
-source /srv/.env # <--- ¡ACTUALIZADO! Fuente de variables de /srv/.env
+source /srv/.env 
 set +a
 
 # --- CONFIGURACIÓN DE CRON ---
@@ -34,17 +34,16 @@ fi
 # ======================================================================
 
 # --- 1.1 Rutas y Nomenclatura ---
-PROJECT_ROOT="/srv" # Asumimos que la raíz del proyecto ahora es /srv
+PROJECT_ROOT="/srv"
 DB_CONTAINER="${INSTANCE}_postgres"
 DB_NAME="${POSTGRES_DBNAME}" 
 DB_USER="${POSTGRES_USER}"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
-# DIRECTORIO DE BACKUPS (Relativo al lugar de ejecución: /srv/scripts/backups)
-BACKUP_DIR="./backups"
+# DIRECTORIO DE BACKUPS (¡ACTUALIZADO! Ruta absoluta en la raíz)
+BACKUP_DIR="/backups"
 
 # Rutas ABSOLUTAS de los volúmenes en el Host (usadas para tar)
-# Ajuste de ruta: Asumimos que data/odoo/web-data ahora está en /srv/data/...
 ODOO_FILESTORE_ROOT="${PROJECT_ROOT}/data/odoo/web-data" 
 ODOO_ADDONS_PATH="${ODOO_FILESTORE_ROOT}/addons"
 
@@ -102,7 +101,7 @@ fi
 TIMESTAMP_FINAL=$(date +"%Y-%m-%d_%H-%M-%S") 
 FINAL_BACKUP_NAME="${DB_NAME}_${TIMESTAMP_FINAL}.tar.gz" 
 CURRENT_TIME_GMT=$(TZ='GMT' date +"%Y-%m-%d %H:%M:%S %Z")
-DOT_ENV_PATH="/srv/.env" # <--- ¡ACTUALIZADO! Ruta de registro
+DOT_ENV_PATH="/srv/.env" 
 VAR_TIME="LAST_BACKUP_TIME_GMT=\"$CURRENT_TIME_GMT\""
 VAR_NAME="FINAL_BACKUP_NAME=\"$FINAL_BACKUP_NAME\""
 
