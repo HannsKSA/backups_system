@@ -113,7 +113,63 @@ def run_recovery_selector():
     remote_file_path = f"{remote_project_path}/{selected_filename}"
     print(f"✅ Archivo a descargar: {selected_filename}")
 
-    # --- 4. Transferencia (SCP) ---
+    # --- 4. Verificación de Espacio en Disco ---
+    print(f"\n🔍 Verificando espacio en disco...")
+    
+    # 4.1 Obtener tamaño del archivo remoto
+    size_command = ['ssh', '-F', ssh_config_temp,
+                    '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no',
+                    ssh_alias, f"stat -c %s {remote_file_path}"]
+    
+    try:
+        result = subprocess.run(size_command, capture_output=True, text=True, check=True)
+        remote_file_size = int(result.stdout.strip())
+        remote_file_size_gb = remote_file_size / (1024**3)
+        print(f"📦 Tamaño del archivo remoto: {remote_file_size_gb:.2f} GB")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ ERROR: No se pudo obtener el tamaño del archivo remoto.")
+        print(f"Mensaje de error: {e.stderr.strip()}")
+        cleanup()
+        sys.exit(1)
+    except ValueError:
+        print(f"❌ ERROR: Respuesta inválida al obtener tamaño del archivo.")
+        cleanup()
+        sys.exit(1)
+    
+    # 4.2 Obtener espacio disponible en el disco local
+    try:
+        stat = os.statvfs(local_recover_path)
+        available_space = stat.f_bavail * stat.f_frsize  # Espacio disponible en bytes
+        available_space_gb = available_space / (1024**3)
+        print(f"💾 Espacio disponible en {local_recover_path}: {available_space_gb:.2f} GB")
+    except Exception as e:
+        print(f"❌ ERROR: No se pudo obtener información del espacio en disco: {e}")
+        cleanup()
+        sys.exit(1)
+    
+    # 4.3 Calcular espacio que quedará libre después de la descarga
+    MIN_FREE_SPACE = 10 * (1024**3)  # 10 GB en bytes
+    MIN_FREE_SPACE_GB = 10
+    space_after_download = available_space - remote_file_size
+    space_after_download_gb = space_after_download / (1024**3)
+    
+    print(f"📊 Espacio libre después de descarga: {space_after_download_gb:.2f} GB")
+    
+    # 4.4 Verificar si hay suficiente espacio
+    if space_after_download < MIN_FREE_SPACE:
+        print(f"\n❌ ERROR: ESPACIO INSUFICIENTE EN DISCO")
+        print(f"   Espacio requerido: {remote_file_size_gb:.2f} GB (archivo)")
+        print(f"   Espacio disponible: {available_space_gb:.2f} GB")
+        print(f"   Espacio libre después: {space_after_download_gb:.2f} GB")
+        print(f"   Mínimo requerido libre: {MIN_FREE_SPACE_GB} GB")
+        print(f"\n   Necesitas liberar al menos {(MIN_FREE_SPACE - space_after_download) / (1024**3):.2f} GB")
+        print(f"   antes de poder descargar este backup.")
+        cleanup()
+        sys.exit(1)
+    
+    print(f"✅ Espacio suficiente verificado (quedarán {space_after_download_gb:.2f} GB libres)")
+
+    # --- 5. Transferencia (SCP) ---
     print(f"\nIniciando transferencia de {selected_filename} a {local_recover_path}...")
     
     # *** USAR -F PARA LA CONFIGURACIÓN TEMPORAL ***
@@ -130,10 +186,10 @@ def run_recovery_selector():
         sys.exit(1)
 
     # --------------------------------------------------------------------
-    # --- 5. Confirmación de Restauración de Base de Datos ---
+    # --- 6. Confirmación de Restauración de Base de Datos ---
     # --------------------------------------------------------------------
     
-    # 5.1 Pregunta de confirmación inicial
+    # 6.1 Pregunta de confirmación inicial
     confirm_restore = input(f"\n⚠️ ADVERTENCIA: ¿Desea proceder a RESTAURAR este backup en la DB '{POSTGRES_DBNAME}'? (si/no): ").lower()
     
     if confirm_restore != "si":
@@ -141,11 +197,11 @@ def run_recovery_selector():
         cleanup()
         sys.exit(0)
 
-    # 5.2 Bucle de Doble Confirmación del Nombre de la DB
+    # 6.2 Bucle de Doble Confirmación del Nombre de la DB
     while True:
         user_db_input = input(f"🔒 **CONFIRME** el nombre de la DB '{POSTGRES_DBNAME}' para continuar la restauración: ").strip()
         
-        # 5.3 Comprobación del nombre
+        # 6.3 Comprobación del nombre
         if user_db_input == POSTGRES_DBNAME:
             print(f"✅ Nombre de DB confirmado: **{POSTGRES_DBNAME}**")
             
@@ -165,7 +221,7 @@ def run_recovery_selector():
             break
             
         else:
-            # 5.4 Si la confirmación del nombre falla
+            # 6.4 Si la confirmación del nombre falla
             print("\n❌ Nombre de DB incorrecto o vacío.")
             
             retry_input = input("¿Desea intentar de nuevo? (si/no): ").lower()
