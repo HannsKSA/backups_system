@@ -2,16 +2,48 @@ import subprocess
 import os
 import sys
 
-# Nota: Para simular la obtención del nombre de la DB,
-# asumimos que POSTGRES_DBNAME también se carga desde el entorno de Bash/dotenv.
-# Si necesitas leerlo directamente de un archivo .env, necesitarías una librería como python-dotenv.
-POSTGRES_DBNAME = os.environ.get("POSTGRES_DBNAME", "ejemplo_default_db") # Valor de fallback si no está en el entorno
+def get_postgres_dbname_from_env_file(env_path="/srv/prod/.env"):
+    """
+    Intenta leer POSTGRES_DBNAME directamente de un archivo .env estilo Bash.
+    """
+    db_name = None
+    try:
+        if os.path.exists(env_path):
+            with open(env_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    # Ignorar comentarios y líneas vacías
+                    if not line or line.startswith('#'):
+                        continue
+                    if line.startswith('POSTGRES_DBNAME='):
+                        # Extraer el valor después del signo igual
+                        parts = line.split('=', 1)
+                        if len(parts) == 2:
+                            db_name = parts[1].strip().strip('"').strip("'")
+                            break
+    except Exception as e:
+        print(f"⚠️  Advertencia: No se pudo leer el archivo .env en {env_path}: {e}")
+    
+    return db_name
+
+# Intenta obtener el nombre de la DB primero de las var. de entorno, luego del archivo .env
+POSTGRES_DBNAME = os.environ.get("POSTGRES_DBNAME")
+if not POSTGRES_DBNAME:
+    POSTGRES_DBNAME = get_postgres_dbname_from_env_file()
+
+# Fallback final si no se encuentra
+if not POSTGRES_DBNAME:
+    POSTGRES_DBNAME = "postgres" # Valor por defecto seguro o "unknown"
 
 def run_recovery_selector():
     # --- 1. Carga de Variables desde el entorno de Bash ---
     instance = os.environ.get("INSTANCE")
     if not instance:
-        print("❌ ERROR: La variable de entorno 'INSTANCE' no está definida.")
+        print("⚠️ La variable de entorno 'INSTANCE' no está definida.")
+        instance = input("Por favor, introduce el nombre de la instancia (INSTANCE): ").strip()
+        
+    if not instance:
+        print("❌ ERROR: No se proporcionó ninguna instancia. Terminando.")
         sys.exit(1)
 
     ssh_alias = "backups"
@@ -23,11 +55,9 @@ def run_recovery_selector():
     # --- 2. Consulta Remota (SSH) ---
     print(f"\n--- Buscando Backups en la Carpeta Remota: {remote_project_path} ---")
     
-    # *** CAMBIO APLICADO AQUÍ: Se utiliza 'ls -1r' (inverso) para listar el más reciente primero. ***
-    # Si los nombres de los archivos tienen la fecha al inicio (YYYY-MM-DD), -r invierte la lista alfabética.
-    # Si prefieres ordenar por tiempo de modificación del archivo, usa 'ls -1t'.
+    # Se utiliza 'ls -1t' para listar ordenado por fecha de modificación (más nuevo primero)
     ssh_command = ['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no', 
-                   ssh_alias, f"ls -1r {remote_project_path}"]
+                   ssh_alias, f"ls -1t {remote_project_path}"]
     
     try:
         result = subprocess.run(ssh_command, capture_output=True, text=True, check=True)

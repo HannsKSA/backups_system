@@ -52,13 +52,18 @@ TMP_RESTORE_DIR="/tmp/odoo_restore_temp_$(date +%s)"
 # 2. SELECCIÓN AUTOMÁTICA DEL ARCHIVO DE BACKUP
 # ======================================================================
 
-echo "Buscando el archivo de backup .tar.gz más reciente en $BACKUP_SEARCH_DIR..."
-
-# Usamos 'ls -t' para seleccionar el último archivo.
-BACKUP_TAR_FILE=$(ls -t "$BACKUP_SEARCH_DIR"/*.tar.gz 2>/dev/null | head -n 1)
+# Verificar si se pasó un argumento (ruta del archivo de backup)
+if [ -n "$1" ]; then
+    BACKUP_TAR_FILE="$1"
+    echo "✅ Argumento detectado. Usando archivo de backup específico: $BACKUP_TAR_FILE"
+else
+    echo "Buscando el archivo de backup .tar.gz más reciente en $BACKUP_SEARCH_DIR..."
+    # Usamos 'ls -t' para seleccionar el último archivo.
+    BACKUP_TAR_FILE=$(ls -t "$BACKUP_SEARCH_DIR"/*.tar.gz 2>/dev/null | head -n 1)
+fi
 
 if [ -z "$BACKUP_TAR_FILE" ] || [ ! -f "$BACKUP_TAR_FILE" ]; then
-    echo "❌ ERROR: No se encontró ningún archivo .tar.gz en el directorio $BACKUP_SEARCH_DIR. Terminando."
+    echo "❌ ERROR: Archivo de backup no válido o no encontrado: '$BACKUP_TAR_FILE'. Terminando."
     exit 1
 fi
 
