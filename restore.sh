@@ -5,6 +5,7 @@
 # - Descomprime el .tar.gz.
 # - Elimina y Carga la DB desde el archivo .sql.
 # - Reemplaza el filestore.
+# - ¡NUEVO! Pregunta si desea vaciar la carpeta de backups al finalizar.
 
 # ======================================================================
 # 1. CONFIGURACIÓN INICIAL Y VALIDACIÓN
@@ -38,7 +39,7 @@ DB_NAME="${POSTGRES_DBNAME}"
 DB_USER="${POSTGRES_USER}"
 
 # Directorio de búsqueda (Ruta fija y predefinida para encontrar el .tar.gz)
-BACKUP_SEARCH_DIR="/srv/scripts/backups"
+BACKUP_SEARCH_DIR="/backups"
 
 # Rutas ABSOLUTAS de los volúmenes en el Host (¡CORRECCIÓN DE RUTAS!)
 HOST_FILESTORE_ROOT="${PROJECT_ROOT}/data/odoo/web-data" # Ruta padre del filestore
@@ -173,3 +174,28 @@ echo "Iniciando contenedor de Odoo ($OD_SERVICE)..."
 docker compose -f "${PROJECT_ROOT}/docker-compose.yml" start "$OD_SERVICE"
 
 echo "Proceso de restauración completa finalizado."
+
+# ======================================================================
+# 7. GESTIÓN DE BACKUPS ANTIGUOS
+# ======================================================================
+
+echo ""
+read -r -p "¿Desea **vaciar completamente** la carpeta de backups ($BACKUP_SEARCH_DIR)? [s/N]: " RESPUESTA
+
+if [[ "$RESPUESTA" =~ ^([sS])$ ]]; then
+    echo "⚠️ ATENCIÓN: Eliminando todos los archivos dentro de $BACKUP_SEARCH_DIR..."
+    
+    # Usamos 'find' y 'rm' para eliminar solo los contenidos, no la carpeta en sí.
+    # Esto evita problemas si el script está ubicado dentro de esa misma carpeta.
+    find "$BACKUP_SEARCH_DIR" -mindepth 1 -delete
+    
+    if [ $? -eq 0 ]; then
+        echo "✅ Carpeta de backups vaciada exitosamente."
+    else
+        echo "❌ ERROR: Fallo al intentar vaciar la carpeta de backups."
+    fi
+else
+    echo "▶️ Terminando el programa. Se conservaron los backups en $BACKUP_SEARCH_DIR."
+fi
+
+exit 0 # Terminación exitosa del script
