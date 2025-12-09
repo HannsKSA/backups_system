@@ -1,7 +1,11 @@
 #!/bin/bash
 
+# ⚠️ NOTA: Este script es LEGACY y ya NO se usa con el nuevo sistema de backups
+# El nuevo backups.sh hace streaming directo al servidor remoto sin almacenamiento local
+# Este script se mantiene solo por compatibilidad con versiones antiguas
+#
 # Script para transferir backups a almacenamiento remoto via SCP
-# Se invoca desde backups.sh
+# Se invoca desde backups.sh (versión antigua)
 
 set -e
 
