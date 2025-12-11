@@ -65,7 +65,17 @@ echo "📦 Iniciando SCP para el backup de la base de datos (.tar.gz)..." >> "$L
 
 DB_FILENAME=$(basename "$BACKUP_FILE")
 
-scp -P "$SSH_PORT" -i "$SSH_KEY" "$BACKUP_FILE" "$SSH_USER@$SSH_HOST":"${REMOTE_DB_DIR}/${DB_FILENAME}"
+# Opciones SCP:
+# -o BatchMode=yes: No pedir contraseñas
+# -o StrictHostKeyChecking=no: No verificar host key
+# -o ServerAliveInterval=60: Enviar keepalive cada 60s
+# -o ServerAliveCountMax=10: Intentar 10 veces antes de desconectar
+scp -P "$SSH_PORT" -i "$SSH_KEY" \
+    -o BatchMode=yes \
+    -o StrictHostKeyChecking=no \
+    -o ServerAliveInterval=60 \
+    -o ServerAliveCountMax=10 \
+    "$BACKUP_FILE" "$SSH_USER@$SSH_HOST":"${REMOTE_DB_DIR}/${DB_FILENAME}"
 
 if [ $? -eq 0 ]; then
     echo "✅ Transferencia SCP de DB completada exitosamente." >> "$LOG_FILE"
