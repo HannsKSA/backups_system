@@ -171,7 +171,7 @@ run_backup() {
     mkdir -p "$TEMP_EXPORT_DIR"
 
     echo "   Extrayendo desde Borg: ${BORG_ARCHIVE_NAME}" >> "$LOG_FILE"
-    borg extract "${BORG_REPO}::${BORG_ARCHIVE_NAME}" -C "$TEMP_EXPORT_DIR" >> "$LOG_FILE" 2>&1
+    (cd "$TEMP_EXPORT_DIR" && borg extract "${BORG_REPO}::${BORG_ARCHIVE_NAME}") >> "$LOG_FILE" 2>&1
 
     if [ $? -eq 0 ]; then
         echo "   Comprimiendo como: ${FINAL_BACKUP_NAME}" >> "$LOG_FILE"
